@@ -16,7 +16,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname));
 
-// MongoDB Database Schemas
+// MongoDB Schemas
 const UserSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   password: { type: String, required: true },
@@ -36,58 +36,84 @@ const MessageSchema = new mongoose.Schema({
 const User = mongoose.model('User', UserSchema);
 const Message = mongoose.model('Message', MessageSchema);
 
-// In-memory socket session registry
-const activeSockets = {}; 
+// In-Memory Fallback Directories
+const activeSockets = {};
+const inMemoryUsers = {};
 
-// Authentication Endpoints
+// Registration Endpoint
 app.post('/api/register', async (req, res) => {
   try {
     const { username, password } = req.body;
-    const existingUser = await User.findOne({ username });
-    if (existingUser) return res.status(400).json({ error: "Username already exists" });
+    if (mongoose.connection.readyState === 1) {
+      const existingUser = await User.findOne({ username });
+      if (existingUser) return res.status(400).json({ error: "Username already exists" });
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const user = new User({ username, password: hashedPassword });
-    await user.save();
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const user = new User({ username, password: hashedPassword });
+      await user.save();
+    } else {
+      if (inMemoryUsers[username]) return res.status(400).json({ error: "Username already exists" });
+      const hashedPassword = await bcrypt.hash(password, 10);
+      inMemoryUsers[username] = { password: hashedPassword, publicKey: "" };
+    }
     res.status(201).json({ message: "Registration successful" });
   } catch (err) {
     res.status(500).json({ error: "Server registration error" });
   }
 });
 
+// Login Endpoint
 app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-    const user = await User.findOne({ username });
-    if (!user) return res.status(400).json({ error: "Invalid credentials" });
+    let storedHash = null;
 
-    const isMatch = await bcrypt.compare(password, user.password);
+    if (mongoose.connection.readyState === 1) {
+      const user = await User.findOne({ username });
+      if (user) storedHash = user.password;
+    } else {
+      if (inMemoryUsers[username]) storedHash = inMemoryUsers[username].password;
+    }
+
+    if (!storedHash) return res.status(400).json({ error: "Invalid credentials" });
+
+    const isMatch = await bcrypt.compare(password, storedHash);
     if (!isMatch) return res.status(400).json({ error: "Invalid credentials" });
 
-    res.json({ username: user.username });
+    res.json({ username });
   } catch (err) {
     res.status(500).json({ error: "Server authentication error" });
   }
 });
 
-// Real-Time Socket Routing & Message Archiving
+// Socket.IO Real-Time Messaging & Key Distribution
 io.on('connection', (socket) => {
   socket.on('register_user', async ({ username, publicKey }) => {
     activeSockets[username] = socket.id;
-    await User.findOneAndUpdate({ username }, { publicKey });
-    
-    // Broadcast active directory list with public keys
-    const allUsers = await User.find({}, 'username publicKey');
-    const userMap = {};
-    allUsers.forEach(u => { if(u.publicKey) userMap[u.username] = u.publicKey; });
-    
-    io.emit('update_user_list', userMap);
+
+    if (mongoose.connection.readyState === 1) {
+      await User.findOneAndUpdate({ username }, { publicKey });
+      const allUsers = await User.find({}, 'username publicKey');
+      const userMap = {};
+      allUsers.forEach(u => { if (u.publicKey) userMap[u.username] = u.publicKey; });
+      io.emit('update_user_list', userMap);
+    } else {
+      if (!inMemoryUsers[username]) inMemoryUsers[username] = {};
+      inMemoryUsers[username].publicKey = publicKey;
+
+      const userMap = {};
+      for (let u in inMemoryUsers) {
+        if (inMemoryUsers[u].publicKey) userMap[u] = inMemoryUsers[u].publicKey;
+      }
+      io.emit('update_user_list', userMap);
+    }
   });
 
   socket.on('send_encrypted_message', async (data) => {
-    // Store encrypted ciphertext payload in DB (Zero-Knowledge)
-    const msg = new Message(data);
-    await msg.save();
+    if (mongoose.connection.readyState === 1) {
+      const msg = new Message(data);
+      await msg.save();
+    }
 
     const targetSocket = activeSockets[data.recipient];
     if (targetSocket) {
@@ -105,16 +131,27 @@ io.on('connection', (socket) => {
   });
 });
 
-// Connect DB & Start Server
+// Server Initialization
 const PORT = process.env.PORT || 3000;
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/securechat';
+const MONGO_URI = process.env.MONGO_URI;
 
-mongoose.connect(MONGO_URI)
-  .then(() => {
-    server.listen(PORT, () => {
-      console.log(`\n==================================================`);
-      console.log(`🚀 Production Server running on port ${PORT}`);
-      console.log(`==================================================\n`);
-    });
-  })
-  .catch(err => console.error("Database connection failure:", err));
+async function startServer() {
+  if (MONGO_URI && !MONGO_URI.includes('cluster0.mongodb.net')) {
+    try {
+      await mongoose.connect(MONGO_URI);
+      console.log('MongoDB Connected Successfully');
+    } catch (err) {
+      console.warn('MongoDB connection failed, running in memory mode:', err.message);
+    }
+  } else {
+    console.log('Running in memory mode without MongoDB cluster');
+  }
+
+  server.listen(PORT, () => {
+    console.log(`\n==================================================`);
+    console.log(`🚀 Production Server running on port ${PORT}`);
+    console.log(`==================================================\n`);
+  });
+}
+
+startServer();
