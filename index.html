@@ -3,12 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Secure E2EE Messaging App</title>
+  <title>CipherChat | End-to-End Encrypted Messaging</title>
   <script src="/socket.io/socket.io.js"></script>
   <style>
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 90vh; }
     .card { background: white; width: 420px; padding: 25px; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); }
-    h2 { text-align: center; color: #222; margin-top: 0; margin-bottom: 15px; }
+    h2 { text-align: center; color: #222; margin-top: 0; margin-bottom: 4px; }
+    .subtitle { text-align: center; color: #666; font-size: 12px; margin-bottom: 16px; }
     .tabs { display: flex; margin-bottom: 15px; border-bottom: 2px solid #eee; }
     .tab { flex: 1; text-align: center; padding: 10px; cursor: pointer; font-weight: bold; color: #666; }
     .tab.active { color: #007bff; border-bottom: 2px solid #007bff; margin-bottom: -2px; }
@@ -29,7 +30,8 @@
 <body>
 
   <div class="card">
-    <h2>🔒 Secure E2EE Chat</h2>
+    <h2>🔒 CipherChat</h2>
+    <div class="subtitle">Zero-Knowledge End-to-End Encrypted Messaging</div>
 
     <!-- AUTHENTICATION PANEL -->
     <div id="auth-panel">
@@ -49,7 +51,7 @@
       <div id="register-form" style="display: none;">
         <input type="text" id="reg-username" placeholder="Choose a Username">
         <input type="password" id="reg-password" placeholder="Create a Password">
-        <button id="reg-btn" onclick="handleRegister()">Create Secure Account</button>
+        <button id="reg-btn" onclick="handleRegister()">Create CipherChat Account</button>
       </div>
 
       <div id="auth-feedback"></div>
@@ -205,142 +207,4 @@
 
     // Export SPKI Public Key
     async function exportPublicKey(key) {
-      const exported = await window.crypto.subtle.exportKey("spki", key);
-      return bufferToBase64(exported);
-    }
-
-    // Import Recipient Public Key
-    async function importPublicKey(pemBase64) {
-      const buffer = base64ToBuffer(pemBase64);
-      return await window.crypto.subtle.importKey(
-        "spki",
-        buffer,
-        { name: "RSA-OAEP", hash: "SHA-256" },
-        true,
-        ["encrypt"]
-      );
-    }
-
-    // Update Active Contact List (Supports String PublicKey Format from Production Server)
-    socket.on('update_user_list', async (usersData) => {
-      const select = document.getElementById('contact-select');
-      const currentSelection = select.value;
-      select.innerHTML = '';
-      publicKeysMap = {};
-
-      for (let username in usersData) {
-        if (username !== myUsername && usersData[username]) {
-          const pubKeyString = typeof usersData[username] === 'string' 
-            ? usersData[username] 
-            : usersData[username].publicKey;
-
-          if (pubKeyString) {
-            publicKeysMap[username] = await importPublicKey(pubKeyString);
-            const opt = document.createElement('option');
-            opt.value = username;
-            opt.innerText = username;
-            select.appendChild(opt);
-          }
-        }
-      }
-
-      if (select.options.length === 0) {
-        const opt = document.createElement('option');
-        opt.value = "";
-        opt.innerText = "No other users online yet";
-        select.appendChild(opt);
-      } else if (currentSelection && publicKeysMap[currentSelection]) {
-        select.value = currentSelection;
-      }
-    });
-
-    // Encrypt and Send Message (AES-256-GCM + RSA-OAEP)
-    async function sendMessage() {
-      const recipient = document.getElementById('contact-select').value;
-      const text = document.getElementById('message-input').value.trim();
-
-      if (!recipient) return alert('Please select an online recipient.');
-      if (!text) return;
-
-      const recipientPubKey = publicKeysMap[recipient];
-      if (!recipientPubKey) return alert('Recipient public key not available.');
-
-      const aesKey = await window.crypto.subtle.generateKey(
-        { name: "AES-GCM", length: 256 },
-        true,
-        ["encrypt", "decrypt"]
-      );
-      const iv = window.crypto.getRandomValues(new Uint8Array(12));
-
-      const encodedText = new TextEncoder().encode(text);
-      const encryptedData = await window.crypto.subtle.encrypt(
-        { name: "AES-GCM", iv: iv },
-        aesKey,
-        encodedText
-      );
-
-      const exportedAesKey = await window.crypto.subtle.exportKey("raw", aesKey);
-      const encryptedAesKey = await window.crypto.subtle.encrypt(
-        { name: "RSA-OAEP" },
-        recipientPubKey,
-        exportedAesKey
-      );
-
-      socket.emit('send_encrypted_message', {
-        recipient: recipient,
-        sender: myUsername,
-        encryptedData: bufferToBase64(encryptedData),
-        encryptedKey: bufferToBase64(encryptedAesKey),
-        iv: bufferToBase64(iv)
-      });
-
-      appendMessage(`Me: ${text}`, 'sent');
-      document.getElementById('message-input').value = '';
-    }
-
-    // Receive and Decrypt Message
-    socket.on('receive_encrypted_message', async (data) => {
-      try {
-        const encryptedDataBuf = base64ToBuffer(data.encryptedData);
-        const encryptedKeyBuf = base64ToBuffer(data.encryptedKey);
-        const ivBuf = base64ToBuffer(data.iv);
-
-        const decryptedAesKeyRaw = await window.crypto.subtle.decrypt(
-          { name: "RSA-OAEP" },
-          myKeyPair.privateKey,
-          encryptedKeyBuf
-        );
-
-        const aesKey = await window.crypto.subtle.importKey(
-          "raw",
-          decryptedAesKeyRaw,
-          "AES-GCM",
-          true,
-          ["decrypt"]
-        );
-
-        const decryptedMessageBuf = await window.crypto.subtle.decrypt(
-          { name: "AES-GCM", iv: new Uint8Array(ivBuf) },
-          aesKey,
-          encryptedDataBuf
-        );
-
-        const plaintext = new TextDecoder().decode(decryptedMessageBuf);
-        appendMessage(`${data.sender}: ${plaintext}`, 'received');
-      } catch (err) {
-        console.error('Decryption failed:', err);
-        appendMessage(`${data.sender}: [Decryption Error]`, 'received');
-      }
-    });
-
-    function appendMessage(text, type) {
-      const box = document.getElementById('chat-box');
-      const div = document.createElement('div');
-      div.className = `msg ${type}`;
-      div.innerText = text;
-      box.appendChild(div);
-      box.scrollTop = box.scrollHeight;
-    }
-  </script>
-</body>
-</html>
+      const exported = await window.crypto.subtle.exportKey("spki",
