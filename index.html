@@ -31,7 +31,7 @@
 
   <div class="card">
     <h2>🔒 CipherChat</h2>
-    <div class="subtitle">Zero-Knowledge End-to-End Encrypted Messaging</div>
+    <div class="subtitle">Private End-to-End Encrypted Messaging</div>
 
     <!-- AUTHENTICATION PANEL -->
     <div id="auth-panel">
@@ -122,89 +122,4 @@
           switchTab('login');
           document.getElementById('login-username').value = username;
           feedback.innerHTML = '<div class="success-msg">Account created! Please sign in.</div>';
-        } else {
-          feedback.innerHTML = `<div class="error-msg">${data.error}</div>`;
-        }
-      } catch (err) {
-        feedback.innerHTML = '<div class="error-msg">Network error during registration.</div>';
-      }
-    }
-
-    // Handle User Login & E2EE Key Setup
-    async function handleLogin() {
-      const username = document.getElementById('login-username').value.trim();
-      const password = document.getElementById('login-password').value.trim();
-      const feedback = document.getElementById('auth-feedback');
-      const btn = document.getElementById('login-btn');
-
-      if (!username || !password) {
-        feedback.innerHTML = '<div class="error-msg">Please enter username and password.</div>';
-        return;
-      }
-
-      btn.innerText = 'Authenticating...';
-
-      try {
-        const res = await fetch('/api/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
-        });
-        const data = await res.json();
-
-        if (!res.ok) {
-          btn.innerText = 'Sign In & Generate Keys';
-          feedback.innerHTML = `<div class="error-msg">${data.error}</div>`;
-          return;
-        }
-
-        btn.innerText = 'Generating RSA Keys...';
-        myUsername = data.username;
-
-        // Generate RSA-OAEP Key Pair
-        myKeyPair = await generateKeyPair();
-        const exportedPubKey = await exportPublicKey(myKeyPair.publicKey);
-
-        // Register active session & public key on Socket.IO
-        socket.emit('register_user', { username: myUsername, publicKey: exportedPubKey });
-
-        document.getElementById('auth-panel').style.display = 'none';
-        document.getElementById('chat-panel').style.display = 'block';
-        document.getElementById('user-display').innerText = myUsername;
-      } catch (err) {
-        btn.innerText = 'Sign In & Generate Keys';
-        feedback.innerHTML = '<div class="error-msg">Connection error.</div>';
-      }
-    }
-
-    // Buffer Utilities
-    function bufferToBase64(buf) {
-      return btoa(String.fromCharCode(...new Uint8Array(buf)));
-    }
-
-    function base64ToBuffer(base64) {
-      const binaryString = atob(base64);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      return bytes.buffer;
-    }
-
-    // Generate RSA-OAEP Key Pair
-    async function generateKeyPair() {
-      return await window.crypto.subtle.generateKey(
-        {
-          name: "RSA-OAEP",
-          modulusLength: 2048,
-          publicExponent: new Uint8Array([1, 0, 1]),
-          hash: "SHA-256",
-        },
-        true,
-        ["encrypt", "decrypt"]
-      );
-    }
-
-    // Export SPKI Public Key
-    async function exportPublicKey(key) {
-      const exported = await window.crypto.subtle.exportKey("spki",
+        } else
